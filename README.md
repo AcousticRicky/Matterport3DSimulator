@@ -73,7 +73,7 @@ sudo apt-get install libopencv-dev python-opencv freeglut3 freeglut3-dev libglm-
 Clone the Matterport3DSimulator repository:
 ```
 # Make sure to clone with --recursive
-git clone --recursive https://github.com/peteanderson80/Matterport3DSimulator.git
+git clone --recursive https://github.com/AcousticRicky/Matterport3DSimulator.git
 cd Matterport3DSimulator
 ```
 

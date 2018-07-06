@@ -7,7 +7,7 @@ Data consists of train/val-seen/val-unseen/test splits. There are two validation
 
 To download, from the top level directory, run:
 ```
-./tasks/R2R/data/download.sh
+./tasks/R2R_RL/data/download.sh
 ```
 
 Data is formatted as follows:
@@ -53,17 +53,17 @@ There is a test server and leaderboard available at [EvalAI](https://evalai.clou
 
 To train the baseline seq2seq model with student-forcing:
 ```
-python tasks/R2R/train.py
+python tasks/R2R_RL/train.py
 ```
 
 To run some simple learning free baselines:
 ```
-python tasks/R2R/eval.py
+python tasks/R2R_RL/eval.py
 ```
 
 Generate figures from the paper:
 ```
-python tasks/R2R/plot.py
+python tasks/R2R_RL/plot.py
 ```
 
 The simple baselines include:

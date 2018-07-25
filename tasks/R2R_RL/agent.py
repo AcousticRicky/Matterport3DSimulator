@@ -16,6 +16,7 @@ import torch.nn.functional as F
 
 from env import R2RBatch
 from utils import padding_idx
+from model import EncoderLSTM
 
 class BaseAgent(object):
     ''' Base class for an R2R agent to generate and save trajectories. '''
@@ -322,23 +323,69 @@ class Seq2SeqAgent(BaseAgent):
 
 
 class ActorCriticAgent(BaseAgent):
-
-    def __init__(self, env, results_path, episode_len=20):
+    def __init__(self, env, vocab_size, results_path, episode_len=20):
         super(ActorCriticAgent, self).__init__(env, results_path)
         self.episode_len = episode_len
         self.losses = []
 
+        ''' Define instruction encoder '''
+        word_embedding_size = 256
+        hidden_size = 512
+        bidirectional = False
+        dropout_ratio = 0.5
+
+	enc_hidden_size = hidden_size//2 if bidirectional else hidden_size
+	self.encoder = EncoderLSTM(vocab_size, word_embedding_size, enc_hidden_size, padding_idx, dropout_ratio, bidirectional=bidirectional).cuda()
+
+
+    def _sort_batch(self, obs):
+        seq_tensor = np.array([ob['instr_encoding'] for ob in obs])
+        seq_lengths = np.argmax(seq_tensor == padding_idx, axis=1)
+        seq_lengths[seq_lengths == 0] = seq_tensor.shape[1] # Full length
+
+        seq_tensor = torch.from_numpy(seq_tensor)
+        seq_lengths = torch.from_numpy(seq_lengths)
+
+        # Sort sequences by lengths
+        seq_lengths, perm_idx = seq_lengths.sort(0, True)
+        sorted_tensor = seq_tensor[perm_idx]
+        mask = (sorted_tensor == padding_idx)[:,:seq_lengths[0]]
+
+        return Variable(sorted_tensor, requires_grad=False).long().cuda(), \
+               mask.byte().cuda(), \
+               list(seq_lengths), list(perm_idx)
+
+
+    def _feature_variable(self, obs):
+        feature_size = obs[0]['feature'].shape[0]
+        features = np.empty((len(obs),feature_size), dtype=np.float32)
+        for i,ob in enumerate(obs):
+            features[i,:] = ob['feature']
+        return Variable(torch.from_numpy(features), requires_grad=False).cuda()
+
+
     def rollout(self):
-        obs = self.env.reset()
+        obs = np.array(self.env.reset())
+        batch_size = len(obs)
+
+        seq, seq_mask, seq_lengths, perm_idx = self._sort_batch(obs)
+        perm_obs = obs[perm_idx]
+
         traj = [{
             'instr_id': ob['instr_id'],
             'path': [(ob['viewpoint'], ob['heading'], ob['elevation'])]
-        } for ob in obs]
+        } for ob in perm_obs]
 
-        self.steps = random.sample(range(-11,1), len(obs))
+        ctx,h_t,c_t = self.encoder(seq, seq_lengths)
+        #print(ctx,h_t,c_t)
+
+        self.steps = random.sample(range(-11,1), batch_size)
         ended = [False] * len(obs)
 
         for t in range(30):
+            f_t = self._feature_variable(perm_obs)
+            #print(f_t)
+
             actions = []
             for i,ob in enumerate(obs):
                 if self.steps[i] >= 5:
@@ -360,6 +407,5 @@ class ActorCriticAgent(BaseAgent):
 
 
     def train(self, n_iters):
-
         for iter in range(1, n_iters + 1):
             self.rollout()

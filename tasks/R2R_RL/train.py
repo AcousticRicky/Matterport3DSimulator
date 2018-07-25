@@ -42,10 +42,10 @@ n_iters = 5000 if feedback_method == 'teacher' else 20000
 model_prefix = 'seq2seq_%s_imagenet' % (feedback_method)
 
 
-def train(train_env, n_iters, log_every=100, val_envs={}):
+def train(train_env, vocab_size, n_iters, log_every=100, val_envs={}):
     ''' Train on training set, validating on both seen and unseen. '''
 
-    agent = ActorCriticAgent(train_env, "", max_episode_len)
+    agent = ActorCriticAgent(train_env, vocab_size, "", max_episode_len)
 
     data_log = defaultdict(list)
     start = time.time()
@@ -106,7 +106,6 @@ def train_val():
     # Create a batch training environment that will also preprocess text
     vocab = read_vocab(TRAIN_VOCAB)
     tok = Tokenizer(vocab=vocab, encoding_length=MAX_INPUT_LENGTH)
-    #train_env = R2RBatch(features, batch_size=batch_size, splits=['train'], tokenizer=tok)
     train_env = R2RBatch(features, batch_size=batch_size, splits=['train'], tokenizer=tok)
 
     # Creat validation environments
@@ -115,7 +114,7 @@ def train_val():
 
     # Build models and train
     enc_hidden_size = hidden_size//2 if bidirectional else hidden_size
-    train(train_env, n_iters, val_envs=val_envs)
+    train(train_env, len(vocab), n_iters, val_envs=val_envs)
 
 
 if __name__ == "__main__":

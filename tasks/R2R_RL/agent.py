@@ -78,6 +78,7 @@ class RandomAgent(BaseAgent):
             'instr_id': ob['instr_id'],
             'path': [(ob['viewpoint'], ob['heading'], ob['elevation'])]
         } for ob in obs]
+
         self.steps = random.sample(range(-11,1), len(obs))
         ended = [False] * len(obs)
         for t in range(30):
@@ -322,12 +323,18 @@ class Seq2SeqAgent(BaseAgent):
 
 class ActorCriticAgent(BaseAgent):
 
+    def __init__(self, env, results_path, episode_len=20):
+        super(ActorCriticAgent, self).__init__(env, results_path)
+        self.episode_len = episode_len
+        self.losses = []
+
     def rollout(self):
         obs = self.env.reset()
         traj = [{
             'instr_id': ob['instr_id'],
             'path': [(ob['viewpoint'], ob['heading'], ob['elevation'])]
         } for ob in obs]
+
         self.steps = random.sample(range(-11,1), len(obs))
         ended = [False] * len(obs)
 
@@ -343,10 +350,16 @@ class ActorCriticAgent(BaseAgent):
                 elif len(ob['navigableLocations']) > 1:
                     actions.append((1, 0, 0)) # go forward
                     self.steps[i] += 1
-                else: 
+                else:
                     actions.append((0, 1, 0)) # turn right until we can go forward
             obs = self.env.step(actions)
             for i,ob in enumerate(obs):
                 if not ended[i]:
                     traj[i]['path'].append((ob['viewpoint'], ob['heading'], ob['elevation']))
         return traj
+
+
+    def train(self, n_iters):
+
+        for iter in range(1, n_iters + 1):
+            self.rollout()

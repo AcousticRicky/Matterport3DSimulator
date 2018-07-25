@@ -319,3 +319,34 @@ class Seq2SeqAgent(BaseAgent):
         self.encoder.load_state_dict(torch.load(encoder_path))
         self.decoder.load_state_dict(torch.load(decoder_path))
 
+
+class ActorCriticAgent(BaseAgent):
+
+    def rollout(self):
+        obs = self.env.reset()
+        traj = [{
+            'instr_id': ob['instr_id'],
+            'path': [(ob['viewpoint'], ob['heading'], ob['elevation'])]
+        } for ob in obs]
+        self.steps = random.sample(range(-11,1), len(obs))
+        ended = [False] * len(obs)
+
+        for t in range(30):
+            actions = []
+            for i,ob in enumerate(obs):
+                if self.steps[i] >= 5:
+                    actions.append((0, 0, 0)) # do nothing, i.e. end
+                    ended[i] = True
+                elif self.steps[i] < 0:
+                    actions.append((0, 1, 0)) # turn right (direction choosing)
+                    self.steps[i] += 1
+                elif len(ob['navigableLocations']) > 1:
+                    actions.append((1, 0, 0)) # go forward
+                    self.steps[i] += 1
+                else: 
+                    actions.append((0, 1, 0)) # turn right until we can go forward
+            obs = self.env.step(actions)
+            for i,ob in enumerate(obs):
+                if not ended[i]:
+                    traj[i]['path'].append((ob['viewpoint'], ob['heading'], ob['elevation']))
+        return traj

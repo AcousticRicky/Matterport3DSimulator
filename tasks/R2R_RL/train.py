@@ -18,11 +18,11 @@ from agent import ActorCriticAgent
 from eval import Evaluation
 
 
-TRAIN_VOCAB = 'tasks/R2R/data/train_vocab.txt'
-TRAINVAL_VOCAB = 'tasks/R2R/data/trainval_vocab.txt'
-RESULT_DIR = 'tasks/R2R/results/'
-SNAPSHOT_DIR = 'tasks/R2R/snapshots/'
-PLOT_DIR = 'tasks/R2R/plots/'
+TRAIN_VOCAB = 'tasks/R2R_RL/data/train_vocab.txt'
+TRAINVAL_VOCAB = 'tasks/R2R_RL/data/trainval_vocab.txt'
+RESULT_DIR = 'tasks/R2R_RL/results/'
+SNAPSHOT_DIR = 'tasks/R2R_RL/snapshots/'
+PLOT_DIR = 'tasks/R2R_RL/plots/'
 
 IMAGENET_FEATURES = 'img_features/ResNet-152-imagenet.tsv'
 MAX_INPUT_LENGTH = 80
@@ -39,7 +39,7 @@ feedback_method = 'sample' # teacher or sample
 learning_rate = 0.0001
 weight_decay = 0.0005
 n_iters = 5000 if feedback_method == 'teacher' else 20000
-model_prefix = 'seq2seq_%s_imagenet' % (feedback_method)
+model_prefix = 'actercritic_%s_imagenet' % (feedback_method)
 
 
 def train(train_env, vocab_size, n_iters, log_every=100, val_envs={}):
@@ -60,6 +60,18 @@ def train(train_env, vocab_size, n_iters, log_every=100, val_envs={}):
         # Run validation
         for env_name, (env, evaluator) in val_envs.iteritems():
             agent.env = env
+            agent.results_path = '%s%s_%s_iter_%d.json' % (RESULT_DIR, model_prefix, env_name, iter)
+            agent.test()
+            agent.write_results()
+
+            score_summary, _ = evaluator.score(agent.results_path)
+            #loss_str += ', %s loss: %.4f' % (env_name, val_loss_avg)
+            for metric,val in score_summary.iteritems():
+                data_log['%s %s' % (env_name,metric)].append(val)
+                if metric in ['success_rate']:
+                    loss_str += ', %s: %.3f' % (metric, val)
+
+        agent.env = train_env
 
         print('%s (%d %d%%) %s' % (timeSince(start, float(iter)/n_iters), iter, float(iter)/n_iters*100, loss_str))
   

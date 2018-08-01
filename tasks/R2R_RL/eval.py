@@ -89,7 +89,7 @@ class Evaluation(object):
         return score_summary, self.scores
 
 
-RESULT_DIR = 'tasks/R2R/results/'
+RESULT_DIR = 'tasks/R2R_RL/results/'
 
 def eval_simple_agents():
     ''' Run simple baselines on each split. '''

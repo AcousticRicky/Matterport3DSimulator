@@ -323,6 +323,19 @@ class Seq2SeqAgent(BaseAgent):
 
 
 class ActorCriticAgent(BaseAgent):
+
+    model_actions = ['left', 'right', 'up', 'down', 'forward', '<end>', '<start>', '<ignore>']
+    env_actions = [
+        (0,-1, 0), # left
+        (0, 1, 0), # right
+        (0, 0, 1), # up
+        (0, 0,-1), # down
+        (1, 0, 0), # forward
+        (0, 0, 0), # <end>
+        (0, 0, 0), # <start>
+        (0, 0, 0)  # <ignore>
+    ]
+
     def __init__(self, env, vocab_size, results_path, episode_len=20):
         super(ActorCriticAgent, self).__init__(env, results_path)
         self.episode_len = episode_len
@@ -364,6 +377,28 @@ class ActorCriticAgent(BaseAgent):
         return Variable(torch.from_numpy(features), requires_grad=False).cuda()
 
 
+    def _teacher_action(self, obs, ended):
+        a = torch.LongTensor(len(obs))
+        for i,ob in enumerate(obs):
+            # Supervised teacher only moves one axis at a time
+            ix,heading_chg,elevation_chg = ob['teacher']
+            if heading_chg > 0:
+                a[i] = self.model_actions.index('right')
+            elif heading_chg < 0:
+                a[i] = self.model_actions.index('left')
+            elif elevation_chg > 0:
+                a[i] = self.model_actions.index('up')
+            elif elevation_chg < 0:
+                a[i] = self.model_actions.index('down')
+            elif ix > 0:
+                a[i] = self.model_actions.index('forward')
+            elif ended[i]:
+                a[i] = self.model_actions.index('<ignore>')
+            else:
+                a[i] = self.model_actions.index('<end>')
+        return Variable(a, requires_grad=False).cuda()
+
+
     def rollout(self):
         obs = np.array(self.env.reset())
         batch_size = len(obs)
@@ -380,14 +415,29 @@ class ActorCriticAgent(BaseAgent):
         #print(ctx,h_t,c_t)
 
         self.steps = random.sample(range(-11,1), batch_size)
-        ended = [False] * len(obs)
 
-        for t in range(30):
+        a_t = Variable(torch.ones(batch_size).long() * self.model_actions.index('<start>'), requires_grad=False).cuda()
+
+        ended = np.array([False] * len(obs))
+        env_action = [None] * batch_size
+
+        for t in range(100):
             f_t = self._feature_variable(perm_obs)
             #print(f_t)
 
+            demo = self._teacher_action(perm_obs, ended)
+            a_random = random.sample(range(0,6), batch_size)
+
+
+            a_t = a_random
+            """
             actions = []
-            for i,ob in enumerate(obs):
+            for i,ob in enumerate(perm_obs):
+                if len(ob['navigableLocations']) <= 1:
+                    #logit[i, self.model_actions.index('forward')] = -float('inf')
+
+
+
                 if self.steps[i] >= 5:
                     actions.append((0, 0, 0)) # do nothing, i.e. end
                     ended[i] = True
@@ -399,10 +449,24 @@ class ActorCriticAgent(BaseAgent):
                     self.steps[i] += 1
                 else:
                     actions.append((0, 1, 0)) # turn right until we can go forward
-            obs = self.env.step(actions)
-            for i,ob in enumerate(obs):
+            """
+
+            for i,idx in enumerate(perm_idx):
+                action_idx = a_t[i].data[0]
+                if action_idx == self.model_actions.index('<end>'):
+                    ended[i] = True
+                env_action[idx] = self.env_actions[action_idx]
+
+            obs = np.array(self.env.step(env_action))
+            perm_obs = obs[perm_idx]
+
+            for i,ob in enumerate(perm_obs):
                 if not ended[i]:
                     traj[i]['path'].append((ob['viewpoint'], ob['heading'], ob['elevation']))
+
+            if ended.all():
+                break
+
         return traj
 
 

@@ -263,7 +263,7 @@ class Seq2SeqAgent(BaseAgent):
 
             # Updated 'ended' list and make environment action
             for i,idx in enumerate(perm_idx):
-                action_idx = a_t[i].data[0]
+                action_idx = a_t[i]#.item()#data[0]
                 if action_idx == self.model_actions.index('<end>'):
                     ended[i] = True
                 env_action[idx] = self.env_actions[action_idx]
@@ -429,7 +429,7 @@ class ActorCriticAgent(BaseAgent):
             a_random = random.sample(range(0,6), batch_size)
 
 
-            a_t = a_random
+            a_t = demo#a_random
             """
             actions = []
             for i,ob in enumerate(perm_obs):
@@ -452,11 +452,12 @@ class ActorCriticAgent(BaseAgent):
             """
 
             for i,idx in enumerate(perm_idx):
-                action_idx = a_t[i].data[0]
+                action_idx = a_t[i]#.item()  #data[0]
                 if action_idx == self.model_actions.index('<end>'):
                     ended[i] = True
                 env_action[idx] = self.env_actions[action_idx]
 
+            #print(env_action)
             obs = np.array(self.env.step(env_action))
             perm_obs = obs[perm_idx]
 

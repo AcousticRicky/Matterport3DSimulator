@@ -17,4 +17,10 @@
 /tasks/R2R/results
 /tasks/R2R/plots
 /tasks/R2R/data
+/tasks/R2R_RL/data/*.json
+/tasks/R2R_RL/data/*_vocab.txt
+/tasks/R2R_RL/snapshots
+/tasks/R2R_RL/results
+/tasks/R2R_RL/plots
+/tasks/R2R_RL/data
 /img_features

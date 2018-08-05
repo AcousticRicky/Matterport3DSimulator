@@ -17,6 +17,7 @@ import torch.nn.functional as F
 from env import R2RBatch
 from utils import padding_idx
 from model import EncoderLSTM
+from eval import Evaluation
 
 class BaseAgent(object):
     ''' Base class for an R2R agent to generate and save trajectories. '''
@@ -338,6 +339,11 @@ class ActorCriticAgent(BaseAgent):
 
     def __init__(self, env, vocab_size, results_path, episode_len=20):
         super(ActorCriticAgent, self).__init__(env, results_path)
+
+        #For evaluation
+        self.ev = Evaluation(['train'])
+
+        #For navigation
         self.episode_len = episode_len
         self.losses = []
 
@@ -400,6 +406,8 @@ class ActorCriticAgent(BaseAgent):
 
 
     def rollout(self):
+
+        #For navigation
         obs = np.array(self.env.reset())
         batch_size = len(obs)
 
@@ -421,38 +429,29 @@ class ActorCriticAgent(BaseAgent):
         ended = np.array([False] * len(obs))
         env_action = [None] * batch_size
 
-        for t in range(100):
+        for t in range(30):
             f_t = self._feature_variable(perm_obs)
             #print(f_t)
+
+            guide_prob = np.random.choice(2, batch_size, p=[0.1, 0.9])
 
             demo = self._teacher_action(perm_obs, ended)
             a_random = random.sample(range(0,6), batch_size)
 
-
-            a_t = demo#a_random
-            """
             actions = []
             for i,ob in enumerate(perm_obs):
-                if len(ob['navigableLocations']) <= 1:
-                    #logit[i, self.model_actions.index('forward')] = -float('inf')
-
-
-
-                if self.steps[i] >= 5:
-                    actions.append((0, 0, 0)) # do nothing, i.e. end
-                    ended[i] = True
-                elif self.steps[i] < 0:
-                    actions.append((0, 1, 0)) # turn right (direction choosing)
-                    self.steps[i] += 1
-                elif len(ob['navigableLocations']) > 1:
-                    actions.append((1, 0, 0)) # go forward
-                    self.steps[i] += 1
+                if guide_prob[i] == 1:
+                    a_t[i] = demo[i]
                 else:
-                    actions.append((0, 1, 0)) # turn right until we can go forward
-            """
+                    action_prob = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
+                    if len(ob['navigableLocations']) <= 1:
+                        action_prob[self.model_actions.index('forward')] = 0.0
+
+                    action_prob = action_prob * (1.0 / action_prob.sum())
+                    a_t[i] = np.random.choice(range(0,6), 1, p=action_prob)[0]
 
             for i,idx in enumerate(perm_idx):
-                action_idx = a_t[i]#.item()  #data[0]
+                action_idx = a_t[i]
                 if action_idx == self.model_actions.index('<end>'):
                     ended[i] = True
                 env_action[idx] = self.env_actions[action_idx]
@@ -473,4 +472,10 @@ class ActorCriticAgent(BaseAgent):
 
     def train(self, n_iters):
         for iter in range(1, n_iters + 1):
-            self.rollout()
+
+            traj = self.rollout()
+
+            for t in traj:
+                nav_error, oracle_error, trajectory_step, trajectory_length = self.ev._score_item(t['instr_id'], t['path'])
+                #print(nav_error < 3.0)
+

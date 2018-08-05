@@ -15,7 +15,7 @@ from utils import read_vocab,write_vocab,build_vocab,Tokenizer,padding_idx,timeS
 from env import R2RBatch
 from model import EncoderLSTM, AttnDecoderLSTM
 from agent import ActorCriticAgent
-from eval import Evaluation
+from test import Evaluation
 
 
 TRAIN_VOCAB = 'tasks/R2R_RL/data/train_vocab.txt'

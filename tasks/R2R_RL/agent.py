@@ -18,6 +18,7 @@ from env import R2RBatch
 from utils import padding_idx
 from model import EncoderLSTM
 from eval import Evaluation
+from actor_critic import EncoderHistory
 
 class BaseAgent(object):
     ''' Base class for an R2R agent to generate and save trajectories. '''
@@ -356,6 +357,7 @@ class ActorCriticAgent(BaseAgent):
 	enc_hidden_size = hidden_size//2 if bidirectional else hidden_size
 	self.encoder = EncoderLSTM(vocab_size, word_embedding_size, enc_hidden_size, padding_idx, dropout_ratio, bidirectional=bidirectional).cuda()
 
+        self.hist_encoder = EncoderHistory(len(self.model_actions), 32, 2048).cuda()
 
     def _sort_batch(self, obs):
         seq_tensor = np.array([ob['instr_encoding'] for ob in obs])
@@ -429,17 +431,24 @@ class ActorCriticAgent(BaseAgent):
         ended = np.array([False] * len(obs))
         env_action = [None] * batch_size
 
-        for t in range(30):
+        h_n, c_n = self.hist_encoder.init_hidden(batch_size)
+
+        for t in range(self.episode_len):
             f_t = self._feature_variable(perm_obs)
             #print(f_t)
+
+            enc_data, h_n, c_n =self.hist_encoder(a_t, f_t, h_n, c_n)
+
 
             guide_prob = np.random.choice(2, batch_size, p=[0.1, 0.9])
 
             demo = self._teacher_action(perm_obs, ended)
             a_random = random.sample(range(0,6), batch_size)
 
-            actions = []
+            
             for i,ob in enumerate(perm_obs):
+
+
                 if guide_prob[i] == 1:
                     a_t[i] = demo[i]
                 else:

@@ -19,6 +19,9 @@ from utils import padding_idx
 from model import EncoderLSTM
 from eval import Evaluation
 from actor_critic import EncoderHistory
+from actor_critic import A2CAgent
+from torch.distributions import Categorical
+from collections import namedtuple
 
 class BaseAgent(object):
     ''' Base class for an R2R agent to generate and save trajectories. '''
@@ -27,9 +30,9 @@ class BaseAgent(object):
         self.env = env
         self.results_path = results_path
         random.seed(1)
-        self.results = {} 
+        self.results = {}
         self.losses = [] # For learning agents
-    
+
     def write_results(self):
         output = [{'instr_id':k, 'trajectory': v} for k,v in self.results.iteritems()]
         with open(self.results_path, 'w') as f:
@@ -338,7 +341,9 @@ class ActorCriticAgent(BaseAgent):
         (0, 0, 0)  # <ignore>
     ]
 
-    def __init__(self, env, vocab_size, results_path, episode_len=20):
+    SavedAction = namedtuple('SavedAction', ['log_prob', 'value', 'step'])
+
+    def __init__(self, env, vocab_size, results_path, batch_size, episode_len=20):
         super(ActorCriticAgent, self).__init__(env, results_path)
 
         #For evaluation
@@ -357,7 +362,14 @@ class ActorCriticAgent(BaseAgent):
 	enc_hidden_size = hidden_size//2 if bidirectional else hidden_size
 	self.encoder = EncoderLSTM(vocab_size, word_embedding_size, enc_hidden_size, padding_idx, dropout_ratio, bidirectional=bidirectional).cuda()
 
-        self.hist_encoder = EncoderHistory(len(self.model_actions), 32, 2048).cuda()
+        context_size = 1024
+        self.hist_encoder = EncoderHistory(len(self.model_actions), 32, 2048, context_size).cuda()
+        self.a2c_agent = A2CAgent(enc_hidden_size, context_size, len(self.model_actions) - 2).cuda()
+        self.saved_actions = [[] for _ in range(batch_size)]
+
+        params = list(self.encoder.parameters()) + list(self.hist_encoder.parameters()) + list(self.a2c_agent.parameters())
+        self.optimizer = torch.optim.Adam(params, lr=3e-2)
+
 
     def _sort_batch(self, obs):
         seq_tensor = np.array([ob['instr_encoding'] for ob in obs])
@@ -422,9 +434,7 @@ class ActorCriticAgent(BaseAgent):
         } for ob in perm_obs]
 
         ctx,h_t,c_t = self.encoder(seq, seq_lengths)
-        #print(ctx,h_t,c_t)
-
-        self.steps = random.sample(range(-11,1), batch_size)
+        #print(ctx.size())
 
         a_t = Variable(torch.ones(batch_size).long() * self.model_actions.index('<start>'), requires_grad=False).cuda()
 
@@ -438,29 +448,33 @@ class ActorCriticAgent(BaseAgent):
             #print(f_t)
 
             enc_data, h_n, c_n =self.hist_encoder(a_t, f_t, h_n, c_n)
-
+            action_prob, critic_value = self.a2c_agent(ctx, seq_lengths, enc_data)
+            #print(action_prob, critic_value)
 
             guide_prob = np.random.choice(2, batch_size, p=[0.1, 0.9])
 
             demo = self._teacher_action(perm_obs, ended)
             a_random = random.sample(range(0,6), batch_size)
 
-            
             for i,ob in enumerate(perm_obs):
-
-
                 if guide_prob[i] == 1:
                     a_t[i] = demo[i]
                 else:
-                    action_prob = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
+                    prob = action_prob[i]
                     if len(ob['navigableLocations']) <= 1:
-                        action_prob[self.model_actions.index('forward')] = 0.0
+                        prob[self.model_actions.index('forward')] = 0.0
 
-                    action_prob = action_prob * (1.0 / action_prob.sum())
-                    a_t[i] = np.random.choice(range(0,6), 1, p=action_prob)[0]
+                    prob = prob * (1.0 / prob.sum())
+                    m = Categorical(prob)
+                    action = m.sample()
+                    a_t[i] = action
+
+                    if not ended[i]:
+                        self.saved_actions[i].append(self.SavedAction(m.log_prob(action), critic_value, t))
 
             for i,idx in enumerate(perm_idx):
                 action_idx = a_t[i]
+
                 if action_idx == self.model_actions.index('<end>'):
                     ended[i] = True
                 env_action[idx] = self.env_actions[action_idx]
@@ -479,12 +493,37 @@ class ActorCriticAgent(BaseAgent):
         return traj
 
 
+    def clear_saved_actions(self):
+        for actions in self.saved_actions:
+            del actions[:]
+
+
+    def test(self):
+        self.encoder.eval()
+        self.hist_encoder.eval()
+        self.a2c_agent.eval()
+
+        super(ActorCriticAgent, self).test()
+
+        self.clear_saved_actions()
+
+
     def train(self, n_iters):
+
+        self.encoder.train()
+        self.hist_encoder.train()
+        self.a2c_agent.train()
+
         for iter in range(1, n_iters + 1):
 
-            traj = self.rollout()
+            self.optimizer.zero_grad()
+            policy_losses = []
+            value_losses = []
+            rewards = []
 
+            traj = self.rollout()
             for t in traj:
                 nav_error, oracle_error, trajectory_step, trajectory_length = self.ev._score_item(t['instr_id'], t['path'])
                 #print(nav_error < 3.0)
 
+            self.clear_saved_actions()

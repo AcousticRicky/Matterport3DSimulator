@@ -2,12 +2,14 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
+from torch.autograd import Variable
+
 
 class EncoderHistory(nn.Module):
-    def __init__(self, action_size, embed_size, feature_size):
+    def __init__(self, action_size, embed_size, feature_size, output_size):
         super(EncoderHistory, self).__init__()
 
-        self.hidden_size = 1024
+        self.hidden_size = output_size
         self.n_layer = 2
 
         self.embed = nn.Embedding(action_size, embed_size)
@@ -32,11 +34,55 @@ class EncoderHistory(nn.Module):
         output = self.linear(output)
         output = F.relu(output)
 
-
-        print(output.size())
         return output.squeeze(1), h_n, c_n
 
+
 class A2CAgent(nn.Module):
-    def __init__(self):
-        super(A2CAgent, self).__init()
-        self.linear1 = nn.Linear(4, 128)
+    def __init__(self, instr_size, context_size, action_size):
+        super(A2CAgent, self).__init__()
+        self.linear1 = nn.Linear(instr_size + context_size, 512)
+        self.linear2 = nn.Linear(512, 256)
+
+        self.actor_linear1 = nn.Linear(256, 128)
+        self.actor_linear2 = nn.Linear(128, 64)
+        self.actor_linear3 = nn.Linear(64, action_size)
+
+        self.critic_linear1 = nn.Linear(256, 128)
+        self.critic_linear2 = nn.Linear(128, 64)
+        self.critic_linear3 = nn.Linear(64, 1)
+
+
+    def forward(self, instr, instr_lengths, context):
+
+        idx = (torch.LongTensor(instr_lengths) - 1).view(-1, 1).expand(len(instr_lengths), instr.size(2))
+        idx = idx.unsqueeze(1).cuda()
+        last_instr = instr.gather(1, Variable(idx)).squeeze(1)
+
+        context_cue = torch.cat((last_instr, context), 1)
+
+        output = self.linear1(context_cue)
+        output = F.relu(output)
+        output = self.linear2(output)
+        output = F.relu(output)
+
+        actor_output = self.actor_linear1(output)
+        actor_output = F.relu(actor_output)
+        actor_output = self.actor_linear2(actor_output)
+        actor_output = F.relu(actor_output)
+        actor_output = self.actor_linear3(actor_output)
+        actor_output = F.relu(actor_output)
+        actor_output = F.softmax(actor_output, dim=1)
+
+        critic_output = self.critic_linear1(output)
+        critic_output = F.relu(critic_output)
+        critic_output = self.critic_linear2(critic_output)
+        critic_output = F.relu(critic_output)
+        critic_output = self.critic_linear3(critic_output)
+        critic_output = F.relu(critic_output)
+
+        return actor_output, critic_output
+ 
+
+
+
+

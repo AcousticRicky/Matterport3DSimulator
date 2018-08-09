@@ -45,7 +45,7 @@ model_prefix = 'actercritic_%s_imagenet' % (feedback_method)
 def train(train_env, vocab_size, n_iters, log_every=100, val_envs={}):
     ''' Train on training set, validating on both seen and unseen. '''
 
-    agent = ActorCriticAgent(train_env, vocab_size, "", max_episode_len)
+    agent = ActorCriticAgent(train_env, vocab_size, "", batch_size, max_episode_len)
 
     data_log = defaultdict(list)
     start = time.time()

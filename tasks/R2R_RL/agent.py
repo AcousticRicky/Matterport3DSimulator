@@ -342,6 +342,7 @@ class ActorCriticAgent(BaseAgent):
     ]
 
     SavedAction = namedtuple('SavedAction', ['log_prob', 'value', 'step'])
+    eps = np.finfo(np.float32).eps.item()
 
     def __init__(self, env, vocab_size, results_path, batch_size, episode_len=20):
         super(ActorCriticAgent, self).__init__(env, results_path)
@@ -451,7 +452,7 @@ class ActorCriticAgent(BaseAgent):
             action_prob, critic_value = self.a2c_agent(ctx, seq_lengths, enc_data)
             #print(action_prob, critic_value)
 
-            guide_prob = np.random.choice(2, batch_size, p=[0.1, 0.9])
+            guide_prob = np.random.choice(2, batch_size, p=[0.3, 0.7])
 
             demo = self._teacher_action(perm_obs, ended)
             a_random = random.sample(range(0,6), batch_size)
@@ -470,7 +471,7 @@ class ActorCriticAgent(BaseAgent):
                     a_t[i] = action
 
                     if not ended[i]:
-                        self.saved_actions[i].append(self.SavedAction(m.log_prob(action), critic_value, t))
+                        self.saved_actions[i].append(self.SavedAction(m.log_prob(action), critic_value[i], t))
 
             for i,idx in enumerate(perm_idx):
                 action_idx = a_t[i]
@@ -516,14 +517,25 @@ class ActorCriticAgent(BaseAgent):
 
         for iter in range(1, n_iters + 1):
 
-            self.optimizer.zero_grad()
             policy_losses = []
             value_losses = []
-            rewards = []
 
+            self.optimizer.zero_grad()
             traj = self.rollout()
-            for t in traj:
+            for i, t in enumerate(traj):
                 nav_error, oracle_error, trajectory_step, trajectory_length = self.ev._score_item(t['instr_id'], t['path'])
-                #print(nav_error < 3.0)
+                reward = 1.0 if nav_error < 3.0 else 0.0
+
+                for log_prob, value, step in self.saved_actions[i]:
+                    #print(log_prob, value, step)
+                    discounted_reward = pow(0.99, trajectory_step - step) * reward
+                    advantage = discounted_reward - value
+                    policy_losses.append(-log_prob * advantage)
+                    value_losses.append(F.smooth_l1_loss(value, Variable(torch.tensor([discounted_reward]).cuda())))
+
+            loss = torch.stack(policy_losses).sum() + torch.stack(value_losses).sum()
+            print("loss", loss)
+            #loss.backward()
+            #optimizer.step()
 
             self.clear_saved_actions()

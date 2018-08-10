@@ -32,7 +32,6 @@ class EncoderHistory(nn.Module):
         output = torch.cat((output, feature.unsqueeze(1)), 2)
         output = F.relu(output)
         output = self.linear(output)
-        output = F.relu(output)
 
         return output.squeeze(1), h_n, c_n
 
@@ -70,7 +69,6 @@ class A2CAgent(nn.Module):
         actor_output = self.actor_linear2(actor_output)
         actor_output = F.relu(actor_output)
         actor_output = self.actor_linear3(actor_output)
-        actor_output = F.relu(actor_output)
         actor_output = F.softmax(actor_output, dim=1)
 
         critic_output = self.critic_linear1(output)
@@ -78,10 +76,9 @@ class A2CAgent(nn.Module):
         critic_output = self.critic_linear2(critic_output)
         critic_output = F.relu(critic_output)
         critic_output = self.critic_linear3(critic_output)
-        critic_output = F.relu(critic_output)
 
         return actor_output, critic_output
- 
+
 
 
 

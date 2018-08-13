@@ -38,11 +38,11 @@ dropout_ratio = 0.5
 feedback_method = 'sample' # teacher or sample
 learning_rate = 0.0001
 weight_decay = 0.0005
-n_iters = 5000 if feedback_method == 'teacher' else 20000
+n_iters = 100000 #if feedback_method == 'teacher' else 20000
 model_prefix = 'actercritic_%s_imagenet' % (feedback_method)
 
 
-def train(train_env, vocab_size, n_iters, log_every=100, val_envs={}):
+def train(train_env, vocab_size, n_iters, log_every=1000, val_envs={}):
     ''' Train on training set, validating on both seen and unseen. '''
 
     agent = ActorCriticAgent(train_env, vocab_size, "", batch_size, max_episode_len)

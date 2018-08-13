@@ -28,7 +28,7 @@ IMAGENET_FEATURES = 'img_features/ResNet-152-imagenet.tsv'
 MAX_INPUT_LENGTH = 80
 
 features = IMAGENET_FEATURES
-batch_size = 2
+batch_size = 1
 max_episode_len = 20
 word_embedding_size = 256
 action_embedding_size = 32
@@ -49,32 +49,44 @@ def train(train_env, vocab_size, n_iters, log_every=100, val_envs={}):
 
     data_log = defaultdict(list)
     start = time.time()
+    guide_prob = 0.7
     for idx in range(0, n_iters, log_every):
         interval = min(log_every,n_iters-idx)
         iter = idx + interval
 
-        agent.train(interval)
+        agent.train(interval, guide_prob)
 
-        loss_str = 'random test'
 
+        train_losses = np.array(agent.losses)
+        train_loss_avg = np.average(train_losses)
+        data_log['train loss'].append(train_loss_avg)
+        loss_str = 'guide prob: %.2f' % guide_prob
+        loss_str += ', train loss: %.4f' % train_loss_avg
         # Run validation
         for env_name, (env, evaluator) in val_envs.iteritems():
             agent.env = env
             agent.results_path = '%s%s_%s_iter_%d.json' % (RESULT_DIR, model_prefix, env_name, iter)
-            agent.test()
+            agent.test(guide_prob)
+
+            #val_losses = np.array(agent.losses)
+            #val_loss_avg = np.average(val_losses)
+            #data_log['%s loss' % env_name].append(val_loss_avg)
+
             agent.write_results()
 
             score_summary, _ = evaluator.score(agent.results_path)
             #loss_str += ', %s loss: %.4f' % (env_name, val_loss_avg)
+            loss_str += ', %s' % (env_name)
             for metric,val in score_summary.iteritems():
                 data_log['%s %s' % (env_name,metric)].append(val)
                 if metric in ['success_rate']:
-                    loss_str += ', %s: %.3f' % (metric, val)
+                    loss_str += ' success: %.2f' % (val)
 
         agent.env = train_env
 
         print('%s (%d %d%%) %s' % (timeSince(start, float(iter)/n_iters), iter, float(iter)/n_iters*100, loss_str))
-  
+        guide_prob -= 0.01
+        guide_prob = max(guide_prob, 0.0)
 
 def setup():
     torch.manual_seed(1)

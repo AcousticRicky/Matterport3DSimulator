@@ -366,10 +366,11 @@ class ActorCriticAgent(BaseAgent):
         context_size = 1024
         self.hist_encoder = EncoderHistory(len(self.model_actions), 32, 2048, context_size).cuda()
         self.a2c_agent = A2CAgent(enc_hidden_size, context_size, len(self.model_actions) - 2).cuda()
-        self.saved_actions = [[] for _ in range(batch_size)]
+        self.saved_actions = []
 
         params = list(self.encoder.parameters()) + list(self.hist_encoder.parameters()) + list(self.a2c_agent.parameters())
-        self.optimizer = torch.optim.Adam(params, lr=3e-2)
+	self.losses = []
+        self.optimizer = torch.optim.Adam(params, lr=0.001, weight_decay=1e-5)
 
 
     def _sort_batch(self, obs):
@@ -420,8 +421,7 @@ class ActorCriticAgent(BaseAgent):
         return Variable(a, requires_grad=False).cuda()
 
 
-    def rollout(self):
-
+    def rollout(self, guide_prob):
         #For navigation
         obs = np.array(self.env.reset())
         batch_size = len(obs)
@@ -435,7 +435,6 @@ class ActorCriticAgent(BaseAgent):
         } for ob in perm_obs]
 
         ctx,h_t,c_t = self.encoder(seq, seq_lengths)
-        #print(ctx.size())
 
         a_t = Variable(torch.ones(batch_size).long() * self.model_actions.index('<start>'), requires_grad=False).cuda()
 
@@ -446,41 +445,34 @@ class ActorCriticAgent(BaseAgent):
 
         for t in range(self.episode_len):
             f_t = self._feature_variable(perm_obs)
-            #print(f_t)
 
             enc_data, h_n, c_n =self.hist_encoder(a_t, f_t, h_n, c_n)
             action_prob, critic_value = self.a2c_agent(ctx, seq_lengths, enc_data)
-            #print(action_prob, critic_value)
 
-            guide_prob = np.random.choice(2, batch_size, p=[0.3, 0.7])
+            guided = np.random.choice(2, batch_size, p=[1.0 - guide_prob, guide_prob])
 
             demo = self._teacher_action(perm_obs, ended)
-            a_random = random.sample(range(0,6), batch_size)
 
-            for i,ob in enumerate(perm_obs):
-                if guide_prob[i] == 1:
-                    a_t[i] = demo[i]
-                else:
-                    prob = action_prob[i]
-                    if len(ob['navigableLocations']) <= 1:
-                        prob[self.model_actions.index('forward')] = 0.0
+            if guided[0] == 1:
+                a_t = demo
+            else:
 
-                    prob = prob * (1.0 / prob.sum())
-                    m = Categorical(prob)
-                    action = m.sample()
-                    a_t[i] = action
+                if len(perm_obs[0]['navigableLocations']) <= 1:
+                    action_prob[0, self.model_actions.index('forward')] = -float('inf')
 
-                    if not ended[i]:
-                        self.saved_actions[i].append(self.SavedAction(m.log_prob(action), critic_value[i], t))
+                action_prob = F.softmax(action_prob, dim=1)
 
-            for i,idx in enumerate(perm_idx):
+                m = Categorical(action_prob)
+                a_t = m.sample()
+                if not ended[0]:
+                    self.saved_actions.append(self.SavedAction(m.log_prob(a_t), critic_value, t))
+
+            for i, (idx, ob) in enumerate(zip(perm_idx, perm_obs)):
                 action_idx = a_t[i]
-
                 if action_idx == self.model_actions.index('<end>'):
                     ended[i] = True
                 env_action[idx] = self.env_actions[action_idx]
 
-            #print(env_action)
             obs = np.array(self.env.step(env_action))
             perm_obs = obs[perm_idx]
 
@@ -495,47 +487,72 @@ class ActorCriticAgent(BaseAgent):
 
 
     def clear_saved_actions(self):
-        for actions in self.saved_actions:
-            del actions[:]
+        del self.saved_actions[:]
 
 
-    def test(self):
+    def test(self, guide_prob):
         self.encoder.eval()
         self.hist_encoder.eval()
         self.a2c_agent.eval()
 
-        super(ActorCriticAgent, self).test()
+	self.env.reset_epoch()
+        self.losses = []
+        self.results = {}
+        # We rely on env showing the entire batch before repeating anything
+        #print 'Testing %s' % self.__class__.__name__
+        looped = False
+        while True:
+            for traj in self.rollout(guide_prob):
+                if traj['instr_id'] in self.results:
+                    looped = True
+                else:
+                    self.results[traj['instr_id']] = traj['path']
+            if looped:
+                break
 
         self.clear_saved_actions()
 
 
-    def train(self, n_iters):
-
+    def train(self, n_iters, guide_prob):
         self.encoder.train()
         self.hist_encoder.train()
         self.a2c_agent.train()
 
+        policy_losses = []
+        value_losses = []
+	self.losses = []
+
         for iter in range(1, n_iters + 1):
-
-            policy_losses = []
-            value_losses = []
-
-            self.optimizer.zero_grad()
-            traj = self.rollout()
+            traj = self.rollout(guide_prob)
             for i, t in enumerate(traj):
                 nav_error, oracle_error, trajectory_step, trajectory_length = self.ev._score_item(t['instr_id'], t['path'])
                 reward = 1.0 if nav_error < 3.0 else 0.0
 
-                for log_prob, value, step in self.saved_actions[i]:
-                    #print(log_prob, value, step)
+                for log_prob, value, step in self.saved_actions:
                     discounted_reward = pow(0.99, trajectory_step - step) * reward
-                    advantage = discounted_reward - value
+                    advantage = discounted_reward - value.item()
                     policy_losses.append(-log_prob * advantage)
-                    value_losses.append(F.smooth_l1_loss(value, Variable(torch.tensor([discounted_reward]).cuda())))
+                    value_losses.append(F.smooth_l1_loss(value, Variable(torch.tensor([[discounted_reward]]).cuda(), requires_grad=False)))
 
+            data_len = len(policy_losses)
+            if data_len > 64:
+                self.optimizer.zero_grad()
+                value_loss = torch.stack(value_losses).sum()
+                policy_loss = torch.stack(policy_losses).sum() 
+                loss = value_loss + policy_loss
+		self.losses.append(value_loss.item() / data_len)
+		#print('sub iter [%d/%d], Average Value Loss: %.4f' %(iter, n_iters, value_loss.item() / data_len))
+                loss.backward()
+                self.optimizer.step()
+                self.clear_saved_actions()
+                policy_losses = []
+                value_losses = []
+
+        data_len = len(policy_losses)
+        if data_len > 0:
+            self.optimizer.zero_grad()
             loss = torch.stack(policy_losses).sum() + torch.stack(value_losses).sum()
-            print("loss", loss)
-            #loss.backward()
-            #optimizer.step()
-
+            self.losses.append(loss.item() / data_len)
+            loss.backward()
+            self.optimizer.step()
             self.clear_saved_actions()

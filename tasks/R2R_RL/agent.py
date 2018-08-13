@@ -522,11 +522,16 @@ class ActorCriticAgent(BaseAgent):
         value_losses = []
 	self.losses = []
 
+        total_num = 0
+        success_num = 0
         for iter in range(1, n_iters + 1):
             traj = self.rollout(guide_prob)
             for i, t in enumerate(traj):
                 nav_error, oracle_error, trajectory_step, trajectory_length = self.ev._score_item(t['instr_id'], t['path'])
                 reward = 1.0 if nav_error < 3.0 else 0.0
+
+                total_num += 1.0
+                success_num += reward
 
                 for log_prob, value, step in self.saved_actions:
                     discounted_reward = pow(0.99, trajectory_step - step) * reward
@@ -556,3 +561,5 @@ class ActorCriticAgent(BaseAgent):
             loss.backward()
             self.optimizer.step()
             self.clear_saved_actions()
+
+        print('guide prob: %.2f, train value loss: %.4f, success: %.2f' % (guide_prob, np.average(np.array(self.losses)), (success_num / total_num)))

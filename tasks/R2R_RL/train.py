@@ -60,13 +60,13 @@ def train(train_env, vocab_size, n_iters, log_every=100, val_envs={}):
         train_losses = np.array(agent.losses)
         train_loss_avg = np.average(train_losses)
         data_log['train loss'].append(train_loss_avg)
-        loss_str = 'guide prob: %.2f' % guide_prob
-        loss_str += ', train loss: %.4f' % train_loss_avg
+        loss_str = ''#'guide prob: %.2f' % guide_prob
+        #loss_str += ', train loss: %.4f' % train_loss_avg
         # Run validation
         for env_name, (env, evaluator) in val_envs.iteritems():
             agent.env = env
             agent.results_path = '%s%s_%s_iter_%d.json' % (RESULT_DIR, model_prefix, env_name, iter)
-            agent.test(guide_prob)
+            agent.test(0.0)#guide_prob)
 
             #val_losses = np.array(agent.losses)
             #val_loss_avg = np.average(val_losses)

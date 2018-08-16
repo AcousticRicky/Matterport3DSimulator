@@ -19,6 +19,22 @@ from tensorboardX import SummaryWriter
 USE_CUDA = torch.cuda.is_available()
 Variable = lambda *args, **kwargs: autograd.Variable(*args, **kwargs).cuda() if USE_CUDA else autograd.Variable(*args, **kwargs)
 
+parser = argparse.ArgumentParser(description='Bayesian DQN Configuration')
+parser.add_argument('--model', default='dqn', type=str, help='Test')
+parser.add_argument('--prefix', default=datetime.today().strftime("%Yy%mm%dd_%HH%MM"), type=str)
+parser.add_argument('--episode', default=None, type=int)
+parser.add_argument('--game', default='CartPole-v1', type=str)
+parser.add_argument('--record', default=True, action='store_true')
+parser.add_argument('--seed', default=123, type=int)
+parser.add_argument('--mode', default='train', type=str)
+parser = parser.parse_args()
+
+# Random Seed
+torch.manual_seed(parser.seed)
+torch.cuda.manual_seed(parser.seed)
+np.random.seed(parser.seed)
+
+
 class DQNAgent():
     def __init__(self, parser, state_size, action_size):
         self.state_size = state_size
@@ -30,10 +46,9 @@ class DQNAgent():
         self.epsilon_decay = 0.999
         self.epsilon_final = 0.001
         # self.epsilon_by_frame = lambda frame_idx: self.epsilon_final + (self.epsilon_start - self.epsilon_final) * math.exp(-1. * frame_idx / self.epsilon_decay)
-        # self.epsilon_min = 0.01
         self.batch_size = 64
         self.train_start = 1000
-        self.drop_p = 0.01
+        self.drop_p = 0.005
 
         self.memory = deque(maxlen=2000)
         if parser.model == 'dqn':
@@ -80,7 +95,6 @@ class DQNAgent():
             state = Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
             q_value = self.model(state)
             action = q_value.max(1)[1].data.cpu().numpy()[0]
-            # print(q_value)
             return action
 
     def thomson_sampling(self, state, mode="train"):
@@ -93,23 +107,32 @@ class DQNAgent():
                 self.model.eval()
             state = Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
             q_value = self.model(state)
-            action = q_value.max(1)[1]
-            action = action.data
-            action = action.cpu().numpy()
-            action = action[0]
-            # print("Thomson Sampling", action)
+            action = q_value.max(1)[1].data.cpu().numpy()[0]
+            # action = action.data
+            # action = action.cpu().numpy()
+            # action = action[0]
         return action
 
     def greedy(self, state):
         self.model.eval()
         state = Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
         q_value = self.model(state)
-        action = q_value.max(1)[1]
-        action = action.data
-        action = action.cpu().numpy()
-        action = action[0]
-        # print("Greedy", action)
+        action = q_value.max(1)[1].data.cpu().numpy()[0]
+        # action = action.data
+        # action = action.cpu().numpy()
+        # action = action[0]
         return action
+
+    def run_greedy_episode(self, env, state):
+        score = 0
+        done = False
+        while not done:
+            action = self.greedy(state)
+            state, reward, done, info = env.step(action)
+            reward = reward if not done or score == 499 else -100
+            score += reward
+        score = score if score == 500 else score + 100
+        return score
 
     def push(self, state, action, reward, next_state, done):
         state = np.expand_dims(state, 0)
@@ -120,18 +143,16 @@ class DQNAgent():
         state, action, reward, next_state, done = zip(*random.sample(self.memory, batch_size))
         return np.concatenate(state), action, reward, np.concatenate(next_state), done
 
-    def get_epsilon(self):
-        return
+    # def get_epsilon(self):
+    #     return
 
     def train_model(self):
-        # t = time.time()
         self.model.train()
         if self.epsilon > self.epsilon_final :
             self.epsilon *= self.epsilon_decay
 
         states, actions, rewards, next_states, dones = self.sample(self.batch_size)
         # mini_batch = random.sample(self.memory, self.batch_size)
-        # t = print_exec_time("after sampling", t)
 
         states = Variable(torch.FloatTensor(np.float32(states)))
         next_states = Variable(torch.FloatTensor(np.float32(next_states)), volatile=True)
@@ -149,7 +170,6 @@ class DQNAgent():
         #     dones.append(mini_batch[i][4])
         # states = Variable(torch.FloatTensor(states))
         # next_states = Variable(torch.FloatTensor(next_states))
-        # t = print_exec_time("after Variable Assign", t)
 
         q_values = self.model(states)
         next_q_values = self.model(next_states)
@@ -166,7 +186,6 @@ class DQNAgent():
         #         target[i][actions[i]] = rewards[i] + self.discount_factor * np.amax(target_val[i])
         # expected_q_value = Variable(torch.FloatTensor(target))
         # q_value = self.model(states)
-        # t = print_exec_time("after set input output", t)
 
         # loss = self.criterion(outputs, target)
         loss = (q_value - Variable(expected_q_value.data)).pow(2).mean()
@@ -179,7 +198,6 @@ class DQNAgent():
         # for param in self.model.parameters():
         #     print(param.grad)
         self.optimizer.step()
-        # t = print_exec_time("after optimization", t)
 
         return loss
 
@@ -191,27 +209,27 @@ class QNet(nn.Module):
         self.output_size = output_size
 
         self.layers = nn.Sequential(
-            nn.Linear(input_size, 48),
+            nn.Linear(input_size, 128),
             nn.ReLU(),
-            nn.Linear(48, 48),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(48, output_size)
+            nn.Linear(128, output_size)
         )
 
     def forward(self, x):
         return self.layers(x)
 
-    def act(self, state, epsilon):
-        if random.random() > epsilon :
-            state = Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
-            q_value = self.forward(state)
-            action = q_value.max(1)[1]
-            action = action.data
-            action = action.cpu().numpy()
-            action = action[0]
-        else:
-            action = random.randrange(self.output_size)
-        return action
+    # def act(self, state, epsilon):
+    #     if random.random() > epsilon :
+    #         state = Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
+    #         q_value = self.forward(state)
+    #         action = q_value.max(1)[1]
+    #         action = action.data
+    #         action = action.cpu().numpy()
+    #         action = action[0]
+    #     else:
+    #         action = random.randrange(self.output_size)
+    #     return action
 
 class DropQNet(nn.Module):
     def __init__(self, input_size, output_size, drop_p):
@@ -220,27 +238,17 @@ class DropQNet(nn.Module):
         self.output_size = output_size
 
         self.layers = nn.Sequential(
-            nn.Linear(input_size, 48),
+            nn.Linear(input_size, 128),
             nn.ReLU(),
             nn.Dropout(drop_p),
-            nn.Linear(48, 48),
+            nn.Linear(128, 128),
             nn.ReLU(),
             nn.Dropout(drop_p),
-            nn.Linear(48, output_size)
+            nn.Linear(128, output_size)
         )
 
     def forward(self, x):
         return self.layers(x)
-
-# if __name__ == "__main__":
-#     model = QNet(4, 2)
-#     def weights_init(m):
-#         if type(m) == nn.Linear:
-#             nn.init.xavier_uniform(m.weight.data)
-#             nn.init.uniform(m.bias.data)
-#     model.apply(weights_init)
-#     d = Variable(torch.FloatTensor([[0, 0, 0, 0]]))
-#     print(model.forward(d))
 
 # EPISODES = 1000
 # env_id = "CartPole-v1"
@@ -250,20 +258,7 @@ class DropQNet(nn.Module):
 # action_size = env.action_space.n
 # render = False
 
-parser = argparse.ArgumentParser(description='Bayesian DQN Configuration')
-parser.add_argument('--model', default='dqn', type=str, help='Test')
-parser.add_argument('--prefix', default=datetime.today().strftime("%Yy%mm%dd_%HH%MM"), type=str)
-parser.add_argument('--episode', default=None, type=int)
-parser.add_argument('--game', default='CartPole-v1', type=str)
-parser.add_argument('--record', default=True, action='store_true')
-parser.add_argument('--seed', default=123, type=int)
-parser.add_argument('--mode', default='train', type=str)
-parser = parser.parse_args()
 
-# Random Seed
-torch.manual_seed(parser.seed)
-torch.cuda.manual_seed(parser.seed)
-np.random.seed(parser.seed)
 
 if __name__ == "__main__":
     # 환경 준비
@@ -276,6 +271,10 @@ if __name__ == "__main__":
     print('Experiment save to ', exp_dirpath)
     if not os.path.exists(exp_dirpath):
         os.makedirs(exp_dirpath)
+
+    # Tensorboard 준비
+    run_dirpath = './runs/{}_{}'.format(parser.model, parser.prefix)
+    writer = SummaryWriter(log_dir=run_dirpath)
 
     # Logging
     logger = logging.getLogger('DropBayesDQN')
@@ -330,7 +329,6 @@ if __name__ == "__main__":
             # 매 타임스텝마다 학습
             if len(agent.memory) >= agent.train_start:
                 loss = agent.train_model()
-                # print(loss)
 
             score += reward
             state = next_state
@@ -343,9 +341,12 @@ if __name__ == "__main__":
                 # 에피소드마다 학습 결과 출력
                 scores.append(score)
                 episodes.append(e)
-                # plt.plot(episodes, scores, 'b')
-                # plt.savefig("./save_graph/cartpole_dqn.png")
-                print("episode:", e, "  score:", score, "  loss:", loss, "  memory length:",
+
+                # Greedy policy 기준으로 한 episode를 돌림
+                state = env.reset()
+                greedy_score = agent.run_greedy_episode(env, state)
+
+                print("episode:", e, "  score:", score, "  greedy score:", greedy_score, "  loss:", loss, "  memory length:",
                       len(agent.memory), "  epsilon:", agent.epsilon)
                 ratio_thomson = ratio_thomson/float(cnt_frame)
                 ratio_epsilon = ratio_epsilon/float(cnt_frame)
@@ -353,18 +354,21 @@ if __name__ == "__main__":
                 ratio_epsilons.append(ratio_epsilon)
                 print("ratio_thomson:", ratio_thomson, "  ratio_epsilon:", ratio_epsilon)
 
+                # 에피소드마다 결과 tensorboard에 저장
+                writer.add_scalar('data/loss', loss, e)
+                writer.add_scalar('data/score', score, e)
+                writer.add_scalar('data/greedy_score', score, e)
+                writer.add_scalar('data/memlength', len(agent.memory), e)
+                writer.add_scalar('data/epsilon', agent.epsilon, e)
+                # writer.add_scalar('data/ratios', {'thomson':ratio_thomson, 'epsilon':ratio_epsilon}, e)
+                writer.add_scalar('data/ratio_thomson', ratio_thomson, e)
+                writer.add_scalar('data/ratio_epsilon', ratio_epsilon, e)
+                # params = agent.model.parameters()
+                for name, param in agent.model.named_parameters():
+                    writer.add_histogram(name, param.clone().cpu().data.numpy(), e)
+
                 # 이전 10개 에피소드의 점수 평균이 490보다 크면 학습 중단
                 # if np.mean(scores[-min(10, len(scores)):]) > 490:
-                #     prefix = "./Drop005/"
-                #     with open(prefix + "scores.txt", 'w') as f:
-                #         for item in scores:
-                #             f.write("%s\n" % item)
-                #     with open(prefix + "ratio_thomsons.txt", 'w') as f:
-                #         for item in ratio_thomsons:
-                #             f.write("%s\n" % item)
-                #     with open(prefix + "ratio_epsilons.txt", 'w') as f:
-                #         for item in ratio_epsilons:
-                #             f.write("%s\n" % item)
                     # agent.model.save_weights("./save_model/cartpole_dqn.h5")
                     # sys.exit()
 
